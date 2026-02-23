@@ -90,6 +90,56 @@ Lines are labeled using the convention `semitone i`, `semitone i + 1`, `semitone
 
 The guidelines layer can be toggled on/off via the **Show semitone guidelines** checkbox in the extension UI, or by toggling layer visibility in Inkscape's Layers panel.
 
+## LilyPond Path Data Attributes
+
+When the **Include LilyPond path data** checkbox is enabled (the default), the extension embeds pre-baked LilyPond Scheme path strings as `data-` attributes on SVG elements during the "Update SVG Canvas" action. This allows consuming applications (like the Chromatic Configurator) to import shapes without performing any path conversion.
+
+### Attributes
+
+| Attribute | Element | Formatter | Description |
+|-----------|---------|-----------|-------------|
+| `data-lilypond-notehead` | `#notehead` | Notehead | LilyPond path for the main notehead shape |
+| `data-lilypond-hollow` | `#hollow` | Notehead | LilyPond path for the hollow cutout (if present) |
+| `data-lilypond-glyph` | Each path | General Glyph | LilyPond path for each glyph path element |
+
+### Format
+
+Each attribute value is a complete LilyPond path string in wrapped Scheme list format:
+
+```scheme
+'(
+    (moveto 0.8 0.0)
+    (curveto 0.8 -0.56 0.44 -1.0 0.0 -1.0)
+    (curveto -0.44 -1.0 -0.8 -0.56 -0.8 0.0)
+    (curveto -0.8 0.56 -0.44 1.0 0.0 1.0)
+    (curveto 0.44 1.0 0.8 0.56 0.8 0.0)
+    (closepath))
+```
+
+Coordinates are in LilyPond staff-space units (÷100 from SVG units) with Y-axis inverted (SVG Y-down → LilyPond Y-up). This is the same transformation applied by the `format_scheme` function and the LilyPond export.
+
+### When They're Generated
+
+The attributes are set during **Update SVG Canvas**, after MCLZ path normalization. This ensures the embedded LilyPond data always reflects the final normalized path.
+
+If you manually edit paths in Inkscape after running the extension, the `data-lilypond-*` attributes will be stale until you re-run the extension. This matches the existing two-phase workflow (process → adjust → re-process → export).
+
+### Disabling
+
+Uncheck **Include LilyPond path data** in the extension settings to suppress these attributes. This also removes any stale attributes from previous runs. Users who don't use the Configurator or other consuming applications may prefer this to keep their SVG output cleaner.
+
+### Usage by Consuming Applications
+
+A consuming application can read the attribute value and emit it directly into a LilyPond `#(define ...)` block:
+
+```javascript
+const noteheadElem = svgDoc.querySelector('#notehead');
+const lilypondPath = noteheadElem.getAttribute('data-lilypond-notehead');
+// lilypondPath is ready to embed: #(define my-path <value>)
+```
+
+When the attribute is absent (checkbox was unchecked, or SVG predates this feature), the application should fall back to converting the SVG `d` attribute manually.
+
 ## Viewport
 
 The SVG root element's `width`, `height`, and `viewBox` are set to exactly match the target notehead/glyph dimensions with no margin. The viewBox is centered at the origin:
@@ -136,7 +186,7 @@ The extension has two operating modes controlled by the always-visible **Action*
 
 The test suite has three tiers:
 
-**Tier 1 — Unit tests** (`test_music_glyph_toolkit.py`): 61 pure pytest tests covering every SVG command type, edge cases, and all three pipeline functions. No Inkscape required.
+**Tier 1 — Unit tests** (`test_music_glyph_toolkit.py`): 87 pure pytest tests covering every SVG command type, edge cases, all three pipeline functions, and `data-lilypond-*` attribute format verification. No Inkscape required.
 
 ```bash
 python -m pytest test_music_glyph_toolkit.py -v

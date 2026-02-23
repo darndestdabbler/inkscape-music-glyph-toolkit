@@ -134,81 +134,163 @@ def pick_guideline_colors(existing_colors):
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Math helpers: arc and quadratic → cubic Bézier conversion
 # ═══════════════════════════════════════════════════════════════════════════════
+def _arc_to_beziers(angle_start, angle_extent):
+    """Generate cubic Bézier control points for a unit-circle arc.
+
+    Uses the standard Maisonobe/kappa tangent-based approximation for arcs
+    up to π/2.  Returns a flat list of coordinates:
+    [cp1x, cp1y, cp2x, cp2y, epx, epy, ...] with 6 values per segment.
+
+    The control-point distance from each endpoint is::
+
+        kappa = (4/3) * tan(segment_angle / 4)
+
+    which is equivalent to ``(4/3) * sin(a/2) / (1 + cos(a/2))`` — the
+    standard formula for cubic Bézier approximation of circular arcs.
+    """
+    n_segs = max(1, int(math.ceil(abs(angle_extent) / (math.pi / 2))))
+    d_angle = angle_extent / n_segs
+    points = []
+    angle = angle_start
+
+    # Standard kappa coefficient (Maisonobe formula).
+    # For a quarter-circle (π/2) this gives the well-known
+    # value ≈ 0.5522847498.
+    kappa = (4.0 / 3.0) * math.tan(d_angle / 4.0)
+
+    for _ in range(n_segs):
+        cos1 = math.cos(angle)
+        sin1 = math.sin(angle)
+        cos2 = math.cos(angle + d_angle)
+        sin2 = math.sin(angle + d_angle)
+
+        # CP1 = P1 + kappa * tangent_at_P1;  tangent at (cos,sin) = (-sin,cos)
+        cp1x = cos1 - kappa * sin1
+        cp1y = sin1 + kappa * cos1
+        # CP2 = P2 - kappa * tangent_at_P2
+        cp2x = cos2 + kappa * sin2
+        cp2y = sin2 - kappa * cos2
+        # End point
+        epx = cos2
+        epy = sin2
+
+        points.extend([cp1x, cp1y, cp2x, cp2y, epx, epy])
+        angle += d_angle
+
+    return points
+
+
 def arc_to_curves(x1, y1, rx, ry, phi_deg, large_arc, sweep, x2, y2):
     """Convert an SVG elliptical arc to one or more cubic Bézier curves.
 
     Implements the SVG arc parameterization algorithm (F.6.5/F.6.6) to find
-    the center, then approximates each ≤90° arc segment with a cubic Bézier.
+    the ellipse center, generates Bézier control points on a **unit circle**,
+    then applies the full affine transform (scale → rotate → translate) to
+    map them onto the actual ellipse.  This two-phase approach (matching the
+    Android/Java SVG reference implementation) is more numerically stable
+    than scaling during generation.
+
+    The final endpoint of the last segment is snapped to the exact target
+    coordinates ``(x2, y2)`` to eliminate accumulated floating-point drift.
 
     Edge cases:
         - Coincident endpoints → empty list
         - Zero radius → [('L', [x2, y2])]
         - Negative radii → treated as positive (per SVG spec)
+        - Zero angular extent → [('L', [x2, y2])]
     """
-    if x1 == x2 and y1 == y2: return []
-    if rx == 0 or ry == 0: return [('L', [x2, y2])]
+    # --- Edge cases (per SVG spec) ---
+    if x1 == x2 and y1 == y2:
+        return []
+    if rx == 0 or ry == 0:
+        return [('L', [x2, y2])]
     rx, ry = abs(rx), abs(ry)
-    phi = math.radians(phi_deg)
-    cos_phi, sin_phi = math.cos(phi), math.sin(phi)
-    dx, dy = (x1 - x2) / 2, (y1 - y2) / 2
+
+    # --- Step 1: Compute (x1', y1') ---
+    phi = math.radians(phi_deg % 360.0)
+    cos_phi = math.cos(phi)
+    sin_phi = math.sin(phi)
+    dx = (x1 - x2) / 2.0
+    dy = (y1 - y2) / 2.0
     x1p = cos_phi * dx + sin_phi * dy
     y1p = -sin_phi * dx + cos_phi * dy
-    lambda_sq = (x1p * x1p) / (rx * rx) + (y1p * y1p) / (ry * ry)
-    if lambda_sq > 1:
-        lambda_val = math.sqrt(lambda_sq)
-        rx *= lambda_val
-        ry *= lambda_val
-    rx_sq, ry_sq = rx * rx, ry * ry
-    x1p_sq, y1p_sq = x1p * x1p, y1p * y1p
-    numerator = rx_sq * ry_sq - rx_sq * y1p_sq - ry_sq * x1p_sq
-    denominator = rx_sq * y1p_sq + ry_sq * x1p_sq
-    factor = 0 if denominator == 0 or numerator < 0 else math.sqrt(numerator / denominator)
-    if large_arc == sweep: factor = -factor
-    cxp = factor * rx * y1p / ry
-    cyp = -factor * ry * x1p / rx
-    cx = cos_phi * cxp - sin_phi * cyp + (x1 + x2) / 2
-    cy = sin_phi * cxp + cos_phi * cyp + (y1 + y2) / 2
 
-    def angle(ux, uy, vx, vy):
-        n = math.sqrt(ux * ux + uy * uy) * math.sqrt(vx * vx + vy * vy)
-        if n == 0: return 0
-        c = max(-1, min(1, (ux * vx + uy * vy) / n))
+    # --- Ensure radii are large enough (tolerance-based, per Java ref) ---
+    rx_sq = rx * rx
+    ry_sq = ry * ry
+    x1p_sq = x1p * x1p
+    y1p_sq = y1p * y1p
+    radii_check = x1p_sq / rx_sq + y1p_sq / ry_sq
+    if radii_check > 0.99999:
+        radii_scale = math.sqrt(radii_check) * 1.00001
+        rx *= radii_scale
+        ry *= radii_scale
+        rx_sq = rx * rx
+        ry_sq = ry * ry
+
+    # --- Step 2: Compute transformed centre (cxp, cyp) ---
+    sign = -1.0 if (large_arc == sweep) else 1.0
+    sq = ((rx_sq * ry_sq) - (rx_sq * y1p_sq) - (ry_sq * x1p_sq)) / \
+         ((rx_sq * y1p_sq) + (ry_sq * x1p_sq))
+    sq = max(0.0, sq)
+    coef = sign * math.sqrt(sq)
+    cxp = coef * (rx * y1p / ry)
+    cyp = coef * -(ry * x1p / rx)
+
+    # --- Step 3: Compute actual centre (cx, cy) ---
+    sx2 = (x1 + x2) / 2.0
+    sy2 = (y1 + y2) / 2.0
+    cx = sx2 + (cos_phi * cxp - sin_phi * cyp)
+    cy = sy2 + (sin_phi * cxp + cos_phi * cyp)
+
+    # --- Step 4: Compute start angle and angular extent ---
+    def _vec_angle(ux, uy, vx, vy):
+        n = math.sqrt((ux * ux + uy * uy) * (vx * vx + vy * vy))
+        if n == 0:
+            return 0.0
+        c = max(-1.0, min(1.0, (ux * vx + uy * vy) / n))
         a = math.acos(c)
-        return -a if ux * vy - uy * vx < 0 else a
+        return -a if (ux * vy - uy * vx < 0) else a
 
-    theta1 = angle(1, 0, (x1p - cxp) / rx, (y1p - cyp) / ry)
-    dtheta = angle((x1p - cxp) / rx, (y1p - cyp) / ry, (-x1p - cxp) / rx, (-y1p - cyp) / ry)
-    if not sweep and dtheta > 0: dtheta -= 2 * math.pi
-    elif sweep and dtheta < 0: dtheta += 2 * math.pi
-    
-    n_segments = max(1, int(math.ceil(abs(dtheta) / (math.pi / 2))))
-    d_theta = dtheta / n_segments
+    theta1 = _vec_angle(1, 0, (x1p - cxp) / rx, (y1p - cyp) / ry)
+    dtheta = _vec_angle(
+        (x1p - cxp) / rx, (y1p - cyp) / ry,
+        (-x1p - cxp) / rx, (-y1p - cyp) / ry,
+    )
+
+    # Zero extent — degenerate arc, emit a line (per Java ref)
+    if dtheta == 0:
+        return [('L', [x2, y2])]
+
+    if not sweep and dtheta > 0:
+        dtheta -= 2.0 * math.pi
+    elif sweep and dtheta < 0:
+        dtheta += 2.0 * math.pi
+
+    # --- Generate unit-circle Béziers, then transform ---
+    bezier_pts = _arc_to_beziers(theta1, dtheta)
+
+    # Apply affine transform: scale(rx, ry) → rotate(phi) → translate(cx, cy)
+    for i in range(0, len(bezier_pts), 2):
+        px = bezier_pts[i] * rx
+        py = bezier_pts[i + 1] * ry
+        bezier_pts[i] = cos_phi * px - sin_phi * py + cx
+        bezier_pts[i + 1] = sin_phi * px + cos_phi * py + cy
+
+    # Snap final endpoint to exact target (eliminates accumulated FP drift)
+    if len(bezier_pts) >= 2:
+        bezier_pts[-2] = x2
+        bezier_pts[-1] = y2
+
+    # --- Build curve tuples ---
     curves = []
-    theta = theta1
-    
-    for _ in range(n_segments):
-        t = math.tan(d_theta / 4)
-        alpha = math.sin(d_theta) * (math.sqrt(4 + 3 * t * t) - 1) / 3
-        cos_t1, sin_t1 = math.cos(theta), math.sin(theta)
-        cos_t2, sin_t2 = math.cos(theta + d_theta), math.sin(theta + d_theta)
-        
-        p1x, p1y = rx * cos_t1, ry * sin_t1
-        p2x, p2y = rx * cos_t2, ry * sin_t2
-        d1x, d1y = -rx * sin_t1, ry * cos_t1
-        d2x, d2y = -rx * sin_t2, ry * cos_t2
-        
-        cp1x, cp1y = p1x + alpha * d1x, p1y + alpha * d1y
-        cp2x, cp2y = p2x - alpha * d2x, p2y - alpha * d2y
-        
-        def transform_point(px, py):
-            return cos_phi * px - sin_phi * py + cx, sin_phi * px + cos_phi * py + cy
-            
-        x_cp1, y_cp1 = transform_point(cp1x, cp1y)
-        x_cp2, y_cp2 = transform_point(cp2x, cp2y)
-        x_end, y_end = transform_point(p2x, p2y)
-        curves.append(('C', [x_cp1, y_cp1, x_cp2, y_cp2, x_end, y_end]))
-        theta += d_theta
-        
+    for i in range(0, len(bezier_pts), 6):
+        curves.append(('C', [
+            bezier_pts[i],     bezier_pts[i + 1],
+            bezier_pts[i + 2], bezier_pts[i + 3],
+            bezier_pts[i + 4], bezier_pts[i + 5],
+        ]))
+
     return curves
 
 def quadratic_to_cubic(x0, y0, x1, y1, x2, y2):
@@ -218,6 +300,97 @@ def quadratic_to_cubic(x0, y0, x1, y1, x2, y2):
     """
     return (x0 + 2/3 * (x1 - x0), y0 + 2/3 * (y1 - y0),
             x2 + 2/3 * (x1 - x2), y2 + 2/3 * (y1 - y2), x2, y2)
+
+
+def _cubic_axis_extremes(p0, p1, p2, p3):
+    """Find parameter values where a cubic Bézier has an extremum on one axis.
+
+    Given four scalar control values (e.g. all X or all Y coordinates),
+    solves dx/dt = 0 for the cubic Bézier and returns the (t, value) pairs
+    for any roots in the open interval (0, 1).
+
+    The derivative of B(t) = (1-t)³p0 + 3(1-t)²t·p1 + 3(1-t)t²·p2 + t³·p3
+    is: B'(t) = 3[(1-t)²(p1-p0) + 2(1-t)t(p2-p1) + t²(p3-p2)]
+    which is a quadratic: At² + Bt + C = 0 where
+        a = p1-p0,  b = p2-p1,  c = p3-p2
+        A = a - 2b + c,  B = 2(b - a),  C = a
+    """
+    a = p1 - p0
+    b = p2 - p1
+    c = p3 - p2
+    A = a - 2*b + c
+    B = 2*(b - a)
+    C = a
+
+    roots = []
+    if abs(A) < 1e-12:
+        # Linear: Bt + C = 0
+        if abs(B) > 1e-12:
+            t = -C / B
+            if 0 < t < 1:
+                roots.append(t)
+    else:
+        disc = B*B - 4*A*C
+        if disc >= 0:
+            sqrt_disc = math.sqrt(disc)
+            for t in [(-B + sqrt_disc) / (2*A), (-B - sqrt_disc) / (2*A)]:
+                if 0 < t < 1:
+                    roots.append(t)
+
+    # Evaluate the cubic at each root
+    results = []
+    for t in roots:
+        s = 1 - t
+        val = s*s*s*p0 + 3*s*s*t*p1 + 3*s*t*t*p2 + t*t*t*p3
+        results.append((t, val))
+    return results
+
+
+def path_extreme_points(commands):
+    """Find the true geometric extreme points of a normalized MCLZ path.
+
+    Examines every segment (lines and cubic Béziers) and returns
+    (x, y) for every point that could be an X or Y extreme — including
+    points along curves where the derivative is zero.
+
+    Args:
+        commands: List of (cmd, args) tuples from parse_and_normalize().
+
+    Returns:
+        List of (x, y) tuples: all endpoints plus all curve extremes.
+    """
+    points = []
+    cx, cy = 0.0, 0.0  # current point
+
+    for cmd, args in commands:
+        if cmd == 'M':
+            cx, cy = args[0], args[1]
+            points.append((cx, cy))
+
+        elif cmd == 'L':
+            cx, cy = args[0], args[1]
+            points.append((cx, cy))
+
+        elif cmd == 'C':
+            x1, y1, x2, y2, x3, y3 = args
+            # Check for X extremes along the curve
+            for _t, xval in _cubic_axis_extremes(cx, x1, x2, x3):
+                s = 1 - _t
+                yval = s*s*s*cy + 3*s*s*_t*y1 + 3*s*_t*_t*y2 + _t*_t*_t*y3
+                points.append((xval, yval))
+            # Check for Y extremes along the curve
+            for _t, yval in _cubic_axis_extremes(cy, y1, y2, y3):
+                s = 1 - _t
+                xval = s*s*s*cx + 3*s*s*_t*x1 + 3*s*_t*_t*x2 + _t*_t*_t*x3
+                points.append((xval, yval))
+            # Always include the endpoint
+            cx, cy = x3, y3
+            points.append((cx, cy))
+
+        elif cmd == 'Z':
+            pass  # Z returns to start, no new extreme
+
+    return points
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Core pipeline: parse → normalize → format
@@ -487,6 +660,7 @@ class MusicGlyphToolkit(inkex.EffectExtension):
         pars.add_argument("--strict_mclz", type=inkex.Boolean, default=True)
         pars.add_argument("--round_decimals", type=int, default=3)
         pars.add_argument("--show_guidelines", type=inkex.Boolean, default=True)
+        pars.add_argument("--include_lilypond_data", type=inkex.Boolean, default=True)
 
     def effect(self):
         output_format = self.options.output_format
@@ -514,6 +688,12 @@ class MusicGlyphToolkit(inkex.EffectExtension):
                     commands = parse_and_normalize(elem.get('d'))
                     baked_d = format_svg_d(commands, self.options.round_decimals)
                     elem.set('d', baked_d)
+
+        # Embed pre-baked LilyPond path data after normalization
+        if self.options.include_lilypond_data:
+            self._embed_lilypond_data(tab)
+        else:
+            self._strip_lilypond_data()
 
     SVG_NS = '{http://www.w3.org/2000/svg}'
     INKSCAPE_NS = '{http://www.inkscape.org/namespaces/inkscape}'
@@ -669,6 +849,27 @@ class MusicGlyphToolkit(inkex.EffectExtension):
             'viewBox': vb,
         })
 
+    def _bake_transforms(self):
+        """Normalize path data and apply any pre-existing transforms.
+
+        Must run before any bounding box calculations or processing.
+
+        Normalizes arcs/quadratics to cubic Béziers BEFORE applying
+        transforms, because inkex.apply_transform() cannot correctly
+        apply rotation/skew transforms to elliptical arc parameters.
+        Cubic Béziers transform correctly under any affine transformation.
+        """
+        for elem in self.svg.descendants().filter(PathElement):
+            eid = elem.get('id', '')
+            if eid in STEM_IDS:
+                continue
+            # Normalize arcs → cubics so the transform applies cleanly
+            d_str = elem.get('d', '')
+            if d_str:
+                commands = parse_and_normalize(d_str)
+                elem.set('d', format_svg_d(commands, decimals=6))
+            elem.apply_transform()
+
     def _find_existing_stem(self, stem_id):
         """Find an existing stem element (rect or path) by ID."""
         for elem in self.svg.descendants():
@@ -676,8 +877,57 @@ class MusicGlyphToolkit(inkex.EffectExtension):
                 return elem
         return None
 
+    def _embed_lilypond_data(self, tab):
+        """Embed pre-baked LilyPond path data as data- attributes on SVG elements.
+
+        Called after MCLZ normalization to ensure paths are fully normalized.
+        The attribute value is the complete LilyPond path string in wrapped
+        format: '((moveto x y) (curveto ...) ... (closepath))
+
+        In notehead mode: sets data-lilypond-notehead on #notehead,
+                          data-lilypond-hollow on #hollow (if present).
+        In glyph mode:    sets data-lilypond-glyph on each non-stem path element.
+        """
+        if tab == "tab_notehead":
+            for elem in self.svg.descendants().filter(PathElement):
+                eid = elem.get('id', '')
+                if eid == 'notehead':
+                    commands = parse_and_normalize(elem.get('d', ''))
+                    scheme = format_scheme(commands)
+                    elem.set('data-lilypond-notehead', f"'(\n{scheme})")
+                elif eid == 'hollow':
+                    commands = parse_and_normalize(elem.get('d', ''))
+                    scheme = format_scheme(commands)
+                    elem.set('data-lilypond-hollow', f"'(\n{scheme})")
+
+        elif tab == "tab_glyph":
+            for elem in self.svg.descendants().filter(PathElement):
+                eid = elem.get('id', '')
+                if eid in STEM_IDS:
+                    continue
+                commands = parse_and_normalize(elem.get('d', ''))
+                scheme = format_scheme(commands)
+                elem.set('data-lilypond-glyph', f"'(\n{scheme})")
+
+    def _strip_lilypond_data(self):
+        """Remove any data-lilypond-* attributes from all elements.
+
+        Called when the 'Include LilyPond path data' checkbox is unchecked,
+        to clean up attributes from previous runs.
+        """
+        lilypond_attrs = ('data-lilypond-notehead', 'data-lilypond-hollow', 'data-lilypond-glyph')
+        for elem in self.svg.descendants().filter(PathElement):
+            for attr in lilypond_attrs:
+                if elem.get(attr) is not None:
+                    del elem.attrib[attr]
+
     def process_notehead(self):
         svg = self.svg
+        
+        # --- BAKE PRE-EXISTING TRANSFORMS ---
+        # Normalize arcs to cubics, then apply any transforms (flips,
+        # rotations, etc.) into path data before processing.
+        self._bake_transforms()
         
         # --- SAFETY CHECK ---
         # Check for unconverted objects that should be paths
@@ -686,6 +936,20 @@ class MusicGlyphToolkit(inkex.EffectExtension):
             eid = elem.get('id', '')
             if eid and ('notehead' in eid.lower() or 'hollow' in eid.lower()):
                 if not isinstance(elem, inkex.PathElement):
+                    # Before raising, check if this non-path element (e.g. a <g>
+                    # group) contains a descendant PathElement with the same
+                    # keyword.  If so, silently skip — the path will be found
+                    # later by the filter(PathElement) lookup.
+                    keyword = 'notehead' if 'notehead' in eid.lower() else 'hollow'
+                    has_descendant_path = False
+                    if hasattr(elem, 'descendants'):
+                        for child in elem.descendants():
+                            if isinstance(child, inkex.PathElement) and \
+                               keyword in child.get('id', '').lower():
+                                has_descendant_path = True
+                                break
+                    if has_descendant_path:
+                        continue
                     tag_name = elem.TAG.split('}')[-1]
                     raise inkex.AbortExtension(
                         f"Wait! The object '{eid}' is a <{tag_name}>, not a Path.\n\n"
@@ -751,10 +1015,12 @@ class MusicGlyphToolkit(inkex.EffectExtension):
         svg.set('viewBox', f"{vbMinX:.{DEC_PLACES}f} {vbMinY:.{DEC_PLACES}f} {round(tnw, DEC_PLACES):.{DEC_PLACES}f} {round(tnh, DEC_PLACES):.{DEC_PLACES}f}")
 
         # --- Compute stem attachment points ---
-        notehead.path = notehead.path.to_absolute()
-        points = []
-        for cmd in notehead.path:
-            if len(cmd.args) >= 2: points.append((cmd.args[-2], cmd.args[-1]))
+        # Use true geometric extremes (including curve apexes) rather than
+        # just path command endpoints, so stems attach at the actual widest
+        # points of curved shapes like rounded diamonds and ovals.
+        d_str = notehead.get('d', '')
+        nh_commands = parse_and_normalize(d_str)
+        points = path_extreme_points(nh_commands)
 
         maxX = max(p[0] for p in points)
         right_points = [p[1] for p in points if abs(p[0] - maxX) < 0.1]
@@ -807,12 +1073,12 @@ class MusicGlyphToolkit(inkex.EffectExtension):
                     parent.remove(el)
                 layer.append(el)
 
-        # Store stem attachment points as data attributes for export
-        notehead.set('data-stem-up-x', str(round(x_up + w_stem / 2.0, 3)))
-        notehead.set('data-stem-up-y', str(round(minY_at_maxX, 3)))
-        notehead.set('data-stem-down-x', str(round(x_down + w_stem / 2.0, 3)))
-        notehead.set('data-stem-down-y', str(round(maxY_at_minX, 3)))
-        
+        # Clean up stale data-stem-* attributes from prior extension versions
+        for attr in ('data-stem-up-x', 'data-stem-up-y',
+                     'data-stem-down-x', 'data-stem-down-y'):
+            if notehead.get(attr) is not None:
+                del notehead.attrib[attr]
+
         # --- Semitone guidelines as SVG lines in a toggleable layer ---
         # Vertical extent: notehead bbox + both stems
         all_y_min = min(-tnh / 2.0, y_up)
@@ -830,6 +1096,11 @@ class MusicGlyphToolkit(inkex.EffectExtension):
 
     def process_glyph(self):
         svg = self.svg
+        
+        # --- BAKE PRE-EXISTING TRANSFORMS ---
+        # Normalize arcs to cubics, then apply any transforms (flips,
+        # rotations, etc.) into path data before processing.
+        self._bake_transforms()
         
         # --- SAFETY CHECK ---
         # Allow rect elements with stem IDs, line/g elements from guidelines layer,
@@ -911,7 +1182,8 @@ class MusicGlyphToolkit(inkex.EffectExtension):
         Produces:
             - \\version header for LilyPond compilation
             - Scheme path defines for each non-stem path element
-            - Stem attachment point defines (x, y pairs in staff-space units)
+            - Stem attachment point defines (computed from stem rect geometry,
+              scaled to staff-space units with Y-axis inversion)
         """
         doc_name = self.svg.get('sodipodi:docname', 'music-glyph.svg')
         base_name = os.path.splitext(doc_name)[0]
@@ -949,28 +1221,41 @@ class MusicGlyphToolkit(inkex.EffectExtension):
             out_lines.append("))")
             out_lines.append("")
 
-        # Generate stem attachment point defines
+        # Generate stem attachment point defines (computed from stem rects)
         if notehead_elem is not None:
             eid = notehead_elem.get('id', 'notehead')
             clean_id = re.sub(r'[^a-zA-Z0-9-]', '-', eid).strip('-')
             
-            stem_up_x = notehead_elem.get('data-stem-up-x')
-            stem_up_y = notehead_elem.get('data-stem-up-y')
-            stem_down_x = notehead_elem.get('data-stem-down-x')
-            stem_down_y = notehead_elem.get('data-stem-down-y')
+            # Find stem-up and stem-down rect elements by ID
+            stem_up_elem = None
+            stem_down_elem = None
+            for elem in self.svg.descendants():
+                sid = elem.get('id', '')
+                if sid == 'stem-up':
+                    stem_up_elem = elem
+                elif sid == 'stem-down':
+                    stem_down_elem = elem
             
-            if stem_up_x is not None and stem_up_y is not None:
-                # Scale /100 and negate Y for LilyPond coordinates
-                sx = round(float(stem_up_x) * 0.01, 4)
-                sy = round(-float(stem_up_y) * 0.01, 4)
+            if stem_up_elem is not None:
+                # Attachment point: center-x of rect, bottom edge (where stem meets notehead)
+                su_x = float(stem_up_elem.get('x', '0'))
+                su_y = float(stem_up_elem.get('y', '0'))
+                su_w = float(stem_up_elem.get('width', '0'))
+                su_h = float(stem_up_elem.get('height', '0'))
+                ax = round((su_x + su_w / 2.0) * 0.01, 4)
+                ay = round(-(su_y + su_h) * 0.01, 4)  # negate Y for LilyPond
                 var_stem_up = f"{clean_base}-{clean_id}-stem-up"
-                out_lines.append(f"#(define {var_stem_up} '({sx} . {sy}))")
+                out_lines.append(f"#(define {var_stem_up} '({ax} . {ay}))")
                 
-            if stem_down_x is not None and stem_down_y is not None:
-                sx = round(float(stem_down_x) * 0.01, 4)
-                sy = round(-float(stem_down_y) * 0.01, 4)
+            if stem_down_elem is not None:
+                # Attachment point: center-x of rect, top edge (where stem meets notehead)
+                sd_x = float(stem_down_elem.get('x', '0'))
+                sd_y = float(stem_down_elem.get('y', '0'))
+                sd_w = float(stem_down_elem.get('width', '0'))
+                ax = round((sd_x + sd_w / 2.0) * 0.01, 4)
+                ay = round(-sd_y * 0.01, 4)  # negate Y for LilyPond
                 var_stem_down = f"{clean_base}-{clean_id}-stem-down"
-                out_lines.append(f"#(define {var_stem_down} '({sx} . {sy}))")
+                out_lines.append(f"#(define {var_stem_down} '({ax} . {ay}))")
             
             out_lines.append("")
 

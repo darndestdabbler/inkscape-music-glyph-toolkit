@@ -26,6 +26,7 @@
     <param name="strict_mclz" type="boolean" gui-text="Convert all paths to strict absolute MCLZ">true</param>
     <param name="round_decimals" type="int" min="0" max="6" gui-text="Coordinate Decimal Places:">3</param>
     <param name="show_guidelines" type="boolean" gui-text="Show semitone guidelines">true</param>
+    <param name="include_lilypond_data" type="boolean" gui-text="Include LilyPond path data">true</param>
     
     <label appearance="header">Workflow</label>
     <label>1. Use a formatter tab above to process your glyph (Action: Update SVG Canvas), and click Apply.</label>

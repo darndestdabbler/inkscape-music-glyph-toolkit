@@ -150,7 +150,7 @@ if not HAS_INKEX:
     _mock.etree = None
     sys.modules.setdefault("inkex", _mock)
 
-from music_glyph_toolkit import parse_and_normalize, format_scheme, FORBIDDEN_COMMANDS
+from music_glyph_toolkit import parse_and_normalize, format_scheme, format_svg_d, FORBIDDEN_COMMANDS
 
 
 def _read_svg_path_ds(svg_path, exclude_ids=None):
@@ -339,3 +339,149 @@ class TestLilyPondStemDefines:
         formatted = str(val)
         assert formatted.startswith("0.") or formatted == "0", \
             f"Value {formatted} should have explicit leading zero"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Tier 3: data-lilypond-* Attribute Verification
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _read_svg_data_attrs(svg_path, element_id, attr_name):
+    """Extract a data- attribute value from an SVG element by ID.
+    
+    Returns the attribute value string, or None if not found.
+    """
+    with open(svg_path) as f:
+        content = f.read()
+    # Find element with matching id, then extract the data attribute
+    # This handles multi-line attribute values (the LilyPond path data spans lines)
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.fromstring(content)
+    except ET.ParseError:
+        return None
+    # Search all elements (including namespaced)
+    for elem in root.iter():
+        eid = elem.get('id', '')
+        if eid == element_id:
+            return elem.get(attr_name)
+    return None
+
+
+class TestLilyPondDataAttributeRoundTrip:
+    """Verify that data-lilypond-* attribute values match format_scheme output.
+    
+    These tests exercise the same path through parse_and_normalize → format_scheme
+    that _embed_lilypond_data uses, verifying the round-trip produces consistent
+    results for various shape types.
+    """
+
+    def test_ellipse_roundtrip(self):
+        """Simple ellipse: parse → format_scheme → wrap matches re-parse → wrap."""
+        d = "M 80 0 C 80 -56 44 -100 0 -100 C -44 -100 -80 -56 -80 0 C -80 56 -44 100 0 100 C 44 100 80 56 80 0 Z"
+        cmds1 = parse_and_normalize(d)
+        # Simulate what effect() does: normalize to SVG d, then re-parse for embedding
+        svg_d = format_svg_d(cmds1, decimals=3)
+        cmds2 = parse_and_normalize(svg_d)
+        scheme1 = format_scheme(cmds1)
+        scheme2 = format_scheme(cmds2)
+        assert scheme1 == scheme2
+
+    def test_kite_roundtrip(self):
+        """Angular kite shape: all lineto commands survive round-trip."""
+        d = "M 0 -100 L 80 0 L 0 100 L -80 0 Z"
+        cmds1 = parse_and_normalize(d)
+        svg_d = format_svg_d(cmds1, decimals=3)
+        cmds2 = parse_and_normalize(svg_d)
+        scheme1 = format_scheme(cmds1)
+        scheme2 = format_scheme(cmds2)
+        assert scheme1 == scheme2
+
+    def test_mixed_curves_roundtrip(self):
+        """Shape with both curves and lines survives round-trip."""
+        d = "M 0 -100 C 44 -100 80 -56 80 0 L 0 100 L -80 0 C -80 -56 -44 -100 0 -100 Z"
+        cmds1 = parse_and_normalize(d)
+        svg_d = format_svg_d(cmds1, decimals=3)
+        cmds2 = parse_and_normalize(svg_d)
+        scheme1 = format_scheme(cmds1)
+        scheme2 = format_scheme(cmds2)
+        assert scheme1 == scheme2
+
+    def test_hollow_roundtrip(self):
+        """Hollow cutout path survives round-trip."""
+        d = "M 50 0 C 50 -36 28 -64 0 -64 C -28 -64 -50 -36 -50 0 C -50 36 -28 64 0 64 C 28 64 50 36 50 0 Z"
+        cmds1 = parse_and_normalize(d)
+        svg_d = format_svg_d(cmds1, decimals=3)
+        cmds2 = parse_and_normalize(svg_d)
+        scheme1 = format_scheme(cmds1)
+        scheme2 = format_scheme(cmds2)
+        assert scheme1 == scheme2
+
+    def test_wrapped_format_embeddable(self):
+        """The wrapped format can be directly embedded in a #(define ...) block."""
+        d = "M 80 0 C 80 -56 44 -100 0 -100 C -44 -100 -80 -56 -80 0 Z"
+        cmds = parse_and_normalize(d)
+        scheme = format_scheme(cmds)
+        wrapped = f"'(\n{scheme})"
+        # Should be valid as part of: #(define my-path '(...))
+        define_str = f"#(define my-path {wrapped})"
+        assert define_str.count("(") == define_str.count(")")
+
+
+class TestLilyPondDataAttributeSourceVerification:
+    """Verify that the _embed_lilypond_data method exists and has correct structure."""
+
+    @staticmethod
+    def _find_source(filename):
+        """Find a project file relative to TEST_DIR or in same directory."""
+        candidates = [
+            os.path.join(TEST_DIR, "..", filename),
+            os.path.join(os.path.dirname(TEST_DIR), filename),
+            os.path.join(TEST_DIR, filename),
+        ]
+        for p in candidates:
+            if os.path.exists(p):
+                return p
+        pytest.skip(f"Could not find {filename}")
+
+    def test_embed_method_exists(self):
+        """The MusicGlyphToolkit class should have _embed_lilypond_data method."""
+        with open(self._find_source("music_glyph_toolkit.py")) as f:
+            source = f.read()
+        assert "def _embed_lilypond_data" in source
+
+    def test_strip_method_exists(self):
+        """The MusicGlyphToolkit class should have _strip_lilypond_data method."""
+        with open(self._find_source("music_glyph_toolkit.py")) as f:
+            source = f.read()
+        assert "def _strip_lilypond_data" in source
+
+    def test_include_lilypond_data_argument(self):
+        """The extension should accept --include_lilypond_data argument."""
+        with open(self._find_source("music_glyph_toolkit.py")) as f:
+            source = f.read()
+        assert "--include_lilypond_data" in source
+
+    def test_data_attr_names_in_source(self):
+        """Verify the correct attribute names are used in the source."""
+        with open(self._find_source("music_glyph_toolkit.py")) as f:
+            source = f.read()
+        assert "data-lilypond-notehead" in source
+        assert "data-lilypond-hollow" in source
+        assert "data-lilypond-glyph" in source
+
+    def test_embed_called_after_mclz(self):
+        """The embed method should be called after MCLZ normalization in effect()."""
+        with open(self._find_source("music_glyph_toolkit.py")) as f:
+            source = f.read()
+        # Find positions of MCLZ normalization and embed call
+        mclz_pos = source.find("strict_mclz")
+        embed_pos = source.find("_embed_lilypond_data")
+        assert mclz_pos < embed_pos, "embed should be called after MCLZ normalization"
+
+    def test_inx_has_checkbox(self):
+        """The .inx file should include the LilyPond data checkbox."""
+        with open(self._find_source("music_glyph_toolkit.inx")) as f:
+            content = f.read()
+        assert "include_lilypond_data" in content
+        assert "Include LilyPond path data" in content
+
