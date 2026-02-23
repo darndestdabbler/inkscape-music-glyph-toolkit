@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+     xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+     width="200" height="200" viewBox="0 0 200 200"
+     sodipodi:docname="notehead_hollow.svg">
+  <sodipodi:namedview id="namedview1" inkscape:current-layer="layer1"/>
+  <g id="layer1" inkscape:groupmode="layer" inkscape:label="Layer 1">
+    <!-- Outer ellipse (notehead) -->
+    <path id="notehead"
+          d="M 140 100 C 140 72 122 50 100 50 C 78 50 60 72 60 100 C 60 128 78 150 100 150 C 122 150 140 128 140 100 Z"
+          style="fill:#000000;stroke:none"/>
+    <!-- Inner ellipse (hollow cutout) -->
+    <path id="hollow"
+          d="M 125 100 C 125 82 114 68 100 68 C 86 68 75 82 75 100 C 75 118 86 132 100 132 C 114 132 125 118 125 100 Z"
+          style="fill:#FFFFFF;stroke:none"/>
+  </g>
+</svg>

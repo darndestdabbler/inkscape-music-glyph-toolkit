@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+     xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+     width="300" height="400" viewBox="0 0 300 400"
+     sodipodi:docname="glyph_mixed_commands.svg">
+  <sodipodi:namedview id="namedview1" inkscape:current-layer="layer1"/>
+  <g id="layer1" inkscape:groupmode="layer" inkscape:label="Layer 1">
+    <!-- Treble-clef-like shape using every dirty command type -->
+    <path id="clef-body"
+          d="M 150 50
+             Q 200 100 200 200
+             T 150 350
+             S 100 380 100 300
+             H 120
+             V 200
+             h -40
+             v -100
+             a 50 50 0 0 1 50 -50
+             l 20 -20 20 20
+             Z"
+          style="fill:#000000;stroke:none"/>
+  </g>
+</svg>

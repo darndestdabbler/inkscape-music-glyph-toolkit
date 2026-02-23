@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<inkscape-extension xmlns="http://www.inkscape.org/namespace/inkscape/extension">
+    <name>Music Glyph Toolkit</name>
+    <id>com.music.glyph_toolkit</id>
+    
+    <param name="active_tab" type="notebook">
+        <page name="tab_notehead" gui-text="Notehead Formatter">
+            <param name="nh_semitones" type="float" min="0.5" max="20.0" gui-text="Notehead Height (Semitones):">2.0</param>
+            <param name="color_stem_up" type="string" gui-text="Stem-Up Color (Hex):">#FF00FF</param>
+            <param name="color_stem_down" type="string" gui-text="Stem-Down Color (Hex):">#00FFFF</param>
+            <label>Centers notehead at 0,0. Scales so 1 semitone = 100 units. Generates stems and guidelines.</label>
+        </page>
+        
+        <page name="tab_glyph" gui-text="General Glyph Formatter">
+            <param name="glyph_semitones" type="float" min="0.5" max="50.0" gui-text="Target Height (Semitones):">4.0</param>
+            <label>Processes all paths. Centers them collectively at 0,0 and scales so 1 semitone = 100 units.</label>
+        </page>
+    </param>
+    
+    <separator/>
+    
+    <param name="output_format" type="optiongroup" appearance="combo" gui-text="Action:">
+        <option value="svg">Update SVG Canvas</option>
+        <option value="lilypond">Export to LilyPond (.ly)</option>
+    </param>
+    <param name="strict_mclz" type="boolean" gui-text="Convert all paths to strict absolute MCLZ">true</param>
+    <param name="round_decimals" type="int" min="0" max="6" gui-text="Coordinate Decimal Places:">3</param>
+    <param name="show_guidelines" type="boolean" gui-text="Show semitone guidelines">true</param>
+    
+    <label appearance="header">Workflow</label>
+    <label>1. Use a formatter tab above to process your glyph (Action: Update SVG Canvas), and click Apply.</label>
+    <label>2. Reposition stems if needed in Inkscape.</label>
+    <label>3. Re-open this tool, switch Action to Export to LilyPond, and click Apply.</label>
+    
+    <effect>
+        <object-type>all</object-type>
+        <effects-menu>
+            <submenu name="Music Typography"/>
+        </effects-menu>
+    </effect>
+    <script>
+        <command location="inx" interpreter="python">music_glyph_toolkit.py</command>
+    </script>
+</inkscape-extension>

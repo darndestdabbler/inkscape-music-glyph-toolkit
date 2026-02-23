@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+     xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+     width="200" height="400" viewBox="0 0 200 400"
+     sodipodi:docname="glyph_multipath.svg">
+  <sodipodi:namedview id="namedview1" inkscape:current-layer="layer1"/>
+  <g id="layer1" inkscape:groupmode="layer" inkscape:label="Layer 1">
+    <!-- Top dot -->
+    <path id="dot-upper"
+          d="M 110 60 C 110 49 105 40 100 40 C 95 40 90 49 90 60 C 90 71 95 80 100 80 C 105 80 110 71 110 60 Z"
+          style="fill:#000000;stroke:none"/>
+    <!-- Bottom dot -->
+    <path id="dot-lower"
+          d="M 110 160 C 110 149 105 140 100 140 C 95 140 90 149 90 160 C 90 171 95 180 100 180 C 105 180 110 171 110 160 Z"
+          style="fill:#000000;stroke:none"/>
+    <!-- Vertical bar using S with chained implicit segments (Bug 1 regression) -->
+    <path id="bar"
+          d="M 95 80 L 95 140 S 96 145 100 145 105 145 105 140 L 105 80 S 104 75 100 75 96 75 95 80 Z"
+          style="fill:#000000;stroke:none"/>
+  </g>
+</svg>
