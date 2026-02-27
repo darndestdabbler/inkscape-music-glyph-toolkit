@@ -649,13 +649,42 @@ def validate_for_export(svg):
 #  Inkscape extension class
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def parse_semitones(value, label, min_val, max_val):
+    """Parse a semitone height string to float with range validation.
+
+    Args:
+        value: String from the INX text field.
+        label: Human-readable field name for error messages.
+        min_val: Minimum allowed value (inclusive).
+        max_val: Maximum allowed value (inclusive).
+
+    Returns:
+        float: The parsed value.
+
+    Raises:
+        inkex.AbortExtension: If the value is not a valid number or is out of range.
+    """
+    try:
+        result = float(value)
+    except (ValueError, TypeError):
+        raise inkex.AbortExtension(
+            f"{label}: '{value}' is not a valid number. Please enter a numeric value (e.g. 2.0, 2.72, 1.5)."
+        )
+    if result < min_val or result > max_val:
+        raise inkex.AbortExtension(
+            f"{label}: {result} is out of range. Please enter a value between {min_val} and {max_val}."
+        )
+    return result
+
+
 class MusicGlyphToolkit(inkex.EffectExtension):
     def add_arguments(self, pars):
         pars.add_argument("--active_tab", type=str, default="tab_notehead")
-        pars.add_argument("--nh_semitones", type=float, default=2.0)
+        pars.add_argument("--nh_semitones", type=str, default="2.0")
+        pars.add_argument("--stem_placemarkers", type=inkex.Boolean, default=True)
         pars.add_argument("--color_stem_up", type=str, default="#FF00FF")
         pars.add_argument("--color_stem_down", type=str, default="#00FFFF")
-        pars.add_argument("--glyph_semitones", type=float, default=4.0)
+        pars.add_argument("--glyph_semitones", type=str, default="4.0")
         pars.add_argument("--output_format", type=str, default="svg")
         pars.add_argument("--strict_mclz", type=inkex.Boolean, default=True)
         pars.add_argument("--round_decimals", type=int, default=3)
@@ -957,7 +986,7 @@ class MusicGlyphToolkit(inkex.EffectExtension):
                     )
         
         layer = svg.get_current_layer()
-        S = self.options.nh_semitones
+        S = parse_semitones(self.options.nh_semitones, "Notehead Height", 0.5, 20.0)
         TARGET_HEIGHT = S * 100.0
         
         noteheads = [e for e in svg.descendants().filter(PathElement) if 'notehead' in e.get('id', '').lower()]
@@ -1032,8 +1061,7 @@ class MusicGlyphToolkit(inkex.EffectExtension):
 
         w_stem = max(TARGET_HEIGHT / 9.0, 100.0 / 5.0)
 
-        # --- Generate stems as rectangles ---
-        # If stems already exist, remove old ones and regenerate
+        # --- Always remove old stem rects first ---
         if existing_stem_up is not None:
             parent = existing_stem_up.getparent()
             if parent is not None:
@@ -1043,56 +1071,62 @@ class MusicGlyphToolkit(inkex.EffectExtension):
             if parent is not None:
                 parent.remove(existing_stem_down)
 
-        # Stem-up: right side of notehead, extends upward
-        # Rect x is flush with right edge minus stem width
-        SVG_NS = '{http://www.w3.org/2000/svg}'
-        x_up = maxX - w_stem
-        y_up = minY_at_maxX - STEM_HEIGHT
-        stem_up = inkex.etree.SubElement(layer, f'{SVG_NS}rect', attrib={
-            'id': 'stem-up',
-            'x': str(x_up), 'y': str(y_up),
-            'width': str(w_stem), 'height': str(STEM_HEIGHT),
-            'style': f'fill:{self.options.color_stem_up};stroke:none',
-        })
-
-        # Stem-down: left side of notehead, extends downward
-        x_down = minX
-        y_down = maxY_at_minX
-        stem_down = inkex.etree.SubElement(layer, f'{SVG_NS}rect', attrib={
-            'id': 'stem-down',
-            'x': str(x_down), 'y': str(y_down),
-            'width': str(w_stem), 'height': str(STEM_HEIGHT),
-            'style': f'fill:{self.options.color_stem_down};stroke:none',
-        })
-
-        # Reorder: stems behind notehead/hollow for clean z-order
-        for el in [stem_down, stem_up, notehead, hollow]:
-            if el is not None:
-                parent = el.getparent()
-                if parent is not None:
-                    parent.remove(el)
-                layer.append(el)
-
         # Clean up stale data-stem-* attributes from prior extension versions
         for attr in ('data-stem-up-x', 'data-stem-up-y',
                      'data-stem-down-x', 'data-stem-down-y'):
             if notehead.get(attr) is not None:
                 del notehead.attrib[attr]
 
-        # --- Semitone guidelines as SVG lines in a toggleable layer ---
-        # Vertical extent: notehead bbox + both stems
-        all_y_min = min(-tnh / 2.0, y_up)
-        all_y_max = max(tnh / 2.0, y_down + STEM_HEIGHT)
-        self.generate_guidelines(tnw, tnh, all_y_min, all_y_max,
-                                 show=self.options.show_guidelines)
-        
-        # --- Full view encompassing stems ---
-        stem_coords = {
-            'x_up': x_up, 'y_up': y_up,
-            'x_down': x_down, 'y_down': y_down,
-            'w_stem': w_stem,
-        }
-        self.generate_full_view(tnw, tnh, stem_coords)
+        if self.options.stem_placemarkers:
+            # --- Generate stems as rectangles ---
+            SVG_NS = '{http://www.w3.org/2000/svg}'
+            x_up = maxX - w_stem
+            y_up = minY_at_maxX - STEM_HEIGHT
+            stem_up = inkex.etree.SubElement(layer, f'{SVG_NS}rect', attrib={
+                'id': 'stem-up',
+                'x': str(x_up), 'y': str(y_up),
+                'width': str(w_stem), 'height': str(STEM_HEIGHT),
+                'style': f'fill:{self.options.color_stem_up};stroke:none',
+            })
+
+            x_down = minX
+            y_down = maxY_at_minX
+            stem_down = inkex.etree.SubElement(layer, f'{SVG_NS}rect', attrib={
+                'id': 'stem-down',
+                'x': str(x_down), 'y': str(y_down),
+                'width': str(w_stem), 'height': str(STEM_HEIGHT),
+                'style': f'fill:{self.options.color_stem_down};stroke:none',
+            })
+
+            # Reorder: stems behind notehead/hollow for clean z-order
+            for el in [stem_down, stem_up, notehead, hollow]:
+                if el is not None:
+                    parent = el.getparent()
+                    if parent is not None:
+                        parent.remove(el)
+                    layer.append(el)
+
+            # --- Semitone guidelines: notehead bbox + both stems ---
+            all_y_min = min(-tnh / 2.0, y_up)
+            all_y_max = max(tnh / 2.0, y_down + STEM_HEIGHT)
+            self.generate_guidelines(tnw, tnh, all_y_min, all_y_max,
+                                     show=self.options.show_guidelines)
+
+            # --- Full view encompassing stems ---
+            stem_coords = {
+                'x_up': x_up, 'y_up': y_up,
+                'x_down': x_down, 'y_down': y_down,
+                'w_stem': w_stem,
+            }
+            self.generate_full_view(tnw, tnh, stem_coords)
+
+        else:
+            # --- No stems (semibreve / breve) ---
+            # Semitone guidelines cover notehead only
+            self.generate_guidelines(tnw, tnh, -tnh / 2.0, tnh / 2.0,
+                                     show=self.options.show_guidelines)
+            # Full view covers notehead only
+            self.generate_full_view(tnw, tnh, stem_coords=None)
 
     def process_glyph(self):
         svg = self.svg
@@ -1127,7 +1161,7 @@ class MusicGlyphToolkit(inkex.EffectExtension):
                 "and ensure they are unioned (Ctrl++) before running this tool."
             )
             
-        S = self.options.glyph_semitones
+        S = parse_semitones(self.options.glyph_semitones, "Target Height", 0.5, 50.0)
         TARGET_HEIGHT = S * 100.0
         
         all_paths = list(svg.descendants().filter(PathElement))
@@ -1222,40 +1256,58 @@ class MusicGlyphToolkit(inkex.EffectExtension):
             out_lines.append("")
 
         # Generate stem attachment point defines (computed from stem rects)
+        # Only for noteheads, and only when stem placemarkers are enabled.
         if notehead_elem is not None:
             eid = notehead_elem.get('id', 'notehead')
             clean_id = re.sub(r'[^a-zA-Z0-9-]', '-', eid).strip('-')
             
-            # Find stem-up and stem-down rect elements by ID
-            stem_up_elem = None
-            stem_down_elem = None
-            for elem in self.svg.descendants():
-                sid = elem.get('id', '')
-                if sid == 'stem-up':
-                    stem_up_elem = elem
-                elif sid == 'stem-down':
-                    stem_down_elem = elem
-            
-            if stem_up_elem is not None:
-                # Attachment point: center-x of rect, bottom edge (where stem meets notehead)
-                su_x = float(stem_up_elem.get('x', '0'))
-                su_y = float(stem_up_elem.get('y', '0'))
-                su_w = float(stem_up_elem.get('width', '0'))
-                su_h = float(stem_up_elem.get('height', '0'))
-                ax = round((su_x + su_w / 2.0) * 0.01, 4)
-                ay = round(-(su_y + su_h) * 0.01, 4)  # negate Y for LilyPond
-                var_stem_up = f"{clean_base}-{clean_id}-stem-up"
-                out_lines.append(f"#(define {var_stem_up} '({ax} . {ay}))")
+            if self.options.stem_placemarkers:
+                # Find stem-up and stem-down rect elements by ID
+                stem_up_elem = None
+                stem_down_elem = None
+                for elem in self.svg.descendants():
+                    sid = elem.get('id', '')
+                    if sid == 'stem-up':
+                        stem_up_elem = elem
+                    elif sid == 'stem-down':
+                        stem_down_elem = elem
                 
-            if stem_down_elem is not None:
-                # Attachment point: center-x of rect, top edge (where stem meets notehead)
-                sd_x = float(stem_down_elem.get('x', '0'))
-                sd_y = float(stem_down_elem.get('y', '0'))
-                sd_w = float(stem_down_elem.get('width', '0'))
-                ax = round((sd_x + sd_w / 2.0) * 0.01, 4)
-                ay = round(-sd_y * 0.01, 4)  # negate Y for LilyPond
-                var_stem_down = f"{clean_base}-{clean_id}-stem-down"
-                out_lines.append(f"#(define {var_stem_down} '({ax} . {ay}))")
+                # Validate: if stems are expected but missing, error
+                missing = []
+                if stem_up_elem is None:
+                    missing.append('stem-up')
+                if stem_down_elem is None:
+                    missing.append('stem-down')
+                if missing:
+                    raise inkex.AbortExtension(
+                        f"Missing stem placemarker(s): {', '.join(missing)}.\n\n"
+                        "Either:\n"
+                        "  • Uncheck 'Stem placemarkers' in the Notehead tab "
+                        "(for stemless noteheads like semibreves/breves), or\n"
+                        "  • Re-run 'Update SVG Canvas' with 'Stem placemarkers' "
+                        "checked to regenerate them."
+                    )
+                
+                if stem_up_elem is not None:
+                    # Attachment point: center-x of rect, bottom edge (where stem meets notehead)
+                    su_x = float(stem_up_elem.get('x', '0'))
+                    su_y = float(stem_up_elem.get('y', '0'))
+                    su_w = float(stem_up_elem.get('width', '0'))
+                    su_h = float(stem_up_elem.get('height', '0'))
+                    ax = round((su_x + su_w / 2.0) * 0.01, 4)
+                    ay = round(-(su_y + su_h) * 0.01, 4)  # negate Y for LilyPond
+                    var_stem_up = f"{clean_base}-{clean_id}-stem-up"
+                    out_lines.append(f"#(define {var_stem_up} '({ax} . {ay}))")
+                    
+                if stem_down_elem is not None:
+                    # Attachment point: center-x of rect, top edge (where stem meets notehead)
+                    sd_x = float(stem_down_elem.get('x', '0'))
+                    sd_y = float(stem_down_elem.get('y', '0'))
+                    sd_w = float(stem_down_elem.get('width', '0'))
+                    ax = round((sd_x + sd_w / 2.0) * 0.01, 4)
+                    ay = round(-sd_y * 0.01, 4)  # negate Y for LilyPond
+                    var_stem_down = f"{clean_base}-{clean_id}-stem-down"
+                    out_lines.append(f"#(define {var_stem_down} '({ax} . {ay}))")
             
             out_lines.append("")
 

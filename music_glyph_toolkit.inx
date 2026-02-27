@@ -5,14 +5,16 @@
     
     <param name="active_tab" type="notebook">
         <page name="tab_notehead" gui-text="Notehead Formatter">
-            <param name="nh_semitones" type="float" min="0.5" max="20.0" gui-text="Notehead Height (Semitones):">2.0</param>
+            <param name="nh_semitones" type="string" gui-text="Notehead Height (Semitones):">2.0</param>
+            <param name="stem_placemarkers" type="boolean" gui-text="Stem placemarkers">true</param>
             <param name="color_stem_up" type="string" gui-text="Stem-Up Color (Hex):">#FF00FF</param>
             <param name="color_stem_down" type="string" gui-text="Stem-Down Color (Hex):">#00FFFF</param>
             <label>Centers notehead at 0,0. Scales so 1 semitone = 100 units. Generates stems and guidelines.</label>
+            <label>Uncheck 'Stem placemarkers' for semibreves, breves, and other stemless noteheads.</label>
         </page>
         
         <page name="tab_glyph" gui-text="General Glyph Formatter">
-            <param name="glyph_semitones" type="float" min="0.5" max="50.0" gui-text="Target Height (Semitones):">4.0</param>
+            <param name="glyph_semitones" type="string" gui-text="Target Height (Semitones):">4.0</param>
             <label>Processes all paths. Centers them collectively at 0,0 and scales so 1 semitone = 100 units.</label>
         </page>
     </param>
